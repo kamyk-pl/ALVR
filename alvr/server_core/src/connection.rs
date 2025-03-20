@@ -247,14 +247,6 @@ pub fn contruct_openvr_config(session: &SessionConfig) -> OpenvrConfig {
 pub fn handshake_loop(ctx: Arc<ConnectionContext>, lifecycle_state: Arc<RwLock<LifecycleState>>) {
     dbg_connection!("handshake_loop: Begin");
 
-    let mut welcome_socket = match WelcomeSocket::new() {
-        Ok(socket) => socket,
-        Err(e) => {
-            error!("Failed to create discovery socket: {e:?}");
-            return;
-        }
-    };
-
     let mut wired_connection = None;
 
     while *lifecycle_state.read() != LifecycleState::ShuttingDown {
@@ -378,77 +370,7 @@ pub fn handshake_loop(ctx: Arc<ConnectionContext>, lifecycle_state: Arc<RwLock<L
             continue;
         }
 
-        let discovery_config = SESSION_MANAGER
-            .read()
-            .settings()
-            .connection
-            .client_discovery
-            .clone();
-        if let Switch::Enabled(config) = discovery_config {
-            dbg_connection!("handshake_loop: Discovering clients");
-
-            let clients = match welcome_socket.recv_all() {
-                Ok(clients) => clients,
-                Err(e) => {
-                    warn!("mDNS listening error: {e:?}");
-
-                    thread::sleep(RETRY_CONNECT_MIN_INTERVAL);
-                    continue;
-                }
-            };
-
-            if clients.is_empty() {
-                thread::sleep(RETRY_CONNECT_MIN_INTERVAL);
-                continue;
-            }
-
-            for (client_hostname, client_ip) in clients {
-                let trusted = {
-                    let mut session_manager = SESSION_MANAGER.write();
-
-                    session_manager.update_client_list(
-                        client_hostname.clone(),
-                        ClientListAction::AddIfMissing {
-                            trusted: false,
-                            manual_ips: vec![],
-                        },
-                    );
-
-                    if config.auto_trust_clients {
-                        session_manager
-                            .update_client_list(client_hostname.clone(), ClientListAction::Trust);
-                    }
-
-                    session_manager
-                        .client_list()
-                        .get(&client_hostname)
-                        .map(|c| c.trusted)
-                        .unwrap_or(false)
-                };
-
-                // do not attempt connection if the client is already connected
-                if trusted
-                    && SESSION_MANAGER
-                        .read()
-                        .client_list()
-                        .get(&client_hostname)
-                        .map(|c| c.connection_state == ConnectionState::Disconnected)
-                        .unwrap_or(false)
-                {
-                    if let Err(e) = try_connect(
-                        Arc::clone(&ctx),
-                        Arc::clone(&lifecycle_state),
-                        [(client_ip, client_hostname.clone())].into_iter().collect(),
-                    ) {
-                        error!("Could not initiate connection for {client_hostname}: {e}");
-                    }
-                }
-
-                thread::sleep(RETRY_CONNECT_MIN_INTERVAL);
-            }
-        } else {
-            thread::sleep(RETRY_CONNECT_MIN_INTERVAL);
-        }
+        thread::sleep(RETRY_CONNECT_MIN_INTERVAL);
     }
 
     alvr_common::dbg_connection!("handshake_loop: Joining connection threads");
